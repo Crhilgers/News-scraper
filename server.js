@@ -1,62 +1,187 @@
-// Dependencies
-const express = require('express');
-const exphbs = require("express-handlebars");
-const bodyParser = require('body-parser');
-const mongoose = require('mongoose');
+console.log('inside server.js');
 
-// Require our Articles and Comments Models
-const Articles = require("./models/Articles.js");
-const Comments = require("./models/Comments.js");
+var express = require('express');
+var bodyParser = require('body-parser');
+var logger = require('morgan');
+var mongoose = require('mongoose');
+var path = require('path');
 
-// Scraping Tools
-var cheerio = require('cheerio');
+var Note = require('./models/Note.js');
+var Article = require('./models/Article.js');
+
 var request = require('request');
+var cheerio = require('cheerio');
 
-//Initialize Express
-const app = express();
+mongoose.Promise = Promise;
+mongoose.connect("mongodb://heroku_xd394bdd:ncntvcs1jnacmt48iaiodvflb7@ds161016.mlab.com:61016/heroku_xd394bdd" , {
+	useMongoClient: true
+});
 
-// Initiate body-parser for the app
+var db = mongoose.connection;
+
+var PORT = process.env.PORT || 3000;
+
+var app = express();
+
+app.use(logger("dev"));
 app.use(bodyParser.urlencoded({
-  extended: false
+	extended: false
 }));
 
-// Express-Handlebars
-app.engine('handlebars', exphbs({defaultLayout: 'main'}));
-app.set('view engine', 'handlebars');
-
-// Make public a static dir
 app.use(express.static("public"));
 
-// if else statement to use localhost if not being hoseted on Herko
-//  Seemed helpful for development without having to switch code repeatedly
-// credit to davesrose for the if/else setup
-if(process.env.NODE_ENV == 'production'){
+var exphbs = require('express-handlebars');
+app.engine("handlebars", exphbs({
+	defaultLayout: "main",
+	partialsDir: path.join(__dirname, "/views/layouts/partials")
+}));
+app.set("view engine", "handlebars");
 
-  mongoose.connect('mongodb://heroku_cslh0zn6:4ng0b98nh1j97mpffs421eqb1l@ds139954.mlab.com:39954/heroku_cslh0zn6');
-}
-else{
-  mongoose.connect('mongodb://localhost/newsScraper');
-}
-
-const db = mongoose.connection;
-
-// Show any Mongoose errors
-db.on('error', function(err) {
-  console.log('Mongoose Error: ', err);
+db.on("error", function(error){
+	console.log("Mongoose Error: ", error);
 });
 
-// Once logged in to the db through mongoose, log a success message
-db.once('open', function() {
-  console.log('Mongoose connection successful.');
+db.once("open", function(){
+	console.log("Mongoose connection successful.");
 });
 
-// Import Routes/Controller
-const router = require('./controllers/controller.js');
-app.use('/', router);
+app.get("/", function(req,res){
+	Article.find({"saved": false}).limit(20).exec(function(error,data){
+		var hbsObject = {
+			article: data
+		};
+		console.log(hbsObject);
+		res.render("home", hbsObject);
+	});
+});
 
+app.get("/saved", function(req,res){
+	Article.find({"saved": true}).populate("notes").exec(function(error, articles){
+		var hbsObject = {
+			article: articles
+		};
+		res.render("saved", hbsObject);
+	});
+});
 
-// Launch App
-const port = process.env.PORT || 3000;
-app.listen(port, function(){
-  console.log('Running on port: ' + port);
+app.get("/scrape", function(req,res){
+	request("https://www.nytimes.com/", function(error,response, html){
+		var $ = cheerio.load(html);
+		$("article").each(function(i,element){
+			var result = {};
+			result.title = $(this).children("h2").text();
+			result.summary = $(this).children(".summary").text();
+			result.link = $(this).children("h2").children("a").attr("href");
+
+			var entry = new Article(result);
+
+			entry.save(function(err, doc){
+				if(err){
+					console.log(err);
+				}
+				else{
+					console.log(doc);
+				}
+			});
+		});
+		res.send("Scrape Complete");
+	});
+});
+
+app.get("/articles", function(req,res){
+	Article.find({}).limit(20).exec(function(error, doc){
+		if(error){
+			console.log(error);
+		}
+		else{
+			res.json(doc);
+		}
+	});
+});
+
+app.get("/articles/:id", function(req,res){
+	Article.findOne({ "_id": req.params.id})
+	.populate("note")
+	.exec(function(error, doc){
+		if(error){
+			console.log(error);
+		}
+		else{
+			res.json(doc);
+		}
+	});
+});
+
+app.post("/articles/save/:id", function(req,res){
+	Article.findOneAndUpdate({ "_id": req.params.id}, {"saved": true})
+	.exec(function(err, doc){
+		if(err){
+			console.log(err);
+		}
+		else{
+			res.send(doc);
+		}
+	});
+});
+
+app.post("/articles/delete/:id", function(req,res){
+	Article.findOneAndUpdate({ "_id": req.params.id}, {"saved": false, "notes":[]})
+	.exec(function(err, doc){
+		if(err){
+			console.log(err);
+		}
+		else{
+			res.send(doc);
+		}
+	});
+});
+
+app.post("notes/save/:id", function(req,res){
+	var newNote = new Note({
+		body: req.body.text,
+		article: req.params.id
+	});
+	console.log(req.body)
+	newNote.save(function(error, note){
+		if(error){
+			console.log(error);
+		}
+		else{
+			Article.findOneAndUpdate({ "_id": req.params.id}, {$push: { "notes": note } })
+			.exec(function(err){
+				if(err){
+					console.log(err);
+					res.send(err);
+				}
+				else{
+					res.send(note);
+				}
+			});
+		}
+	});
+});
+
+app.delete("/notes/delete/:note_id/:article", function(req,res){
+	Note.findOneAndRemove({"_id": req.params.note.id}, function(err){
+		if(err){
+			console.log(err);
+			res.send(err);
+		}
+		else{
+			Article.findOneAndUpdate({"_id": req.params.article_id}, {$pull: {"notes": req.params.note_id}})
+				.exec(function(err){
+					if(err){
+						console.log(err);
+						res.send(err); 
+					}
+					else{
+						res.send("Note Deleted");
+					}
+				});
+		}
+	});
+});
+
+app.listen(PORT, function(){
+	console.log("App running on PORT: " + PORT);
 });
