@@ -13,9 +13,7 @@ var request = require('request');
 var cheerio = require('cheerio');
 
 mongoose.Promise = Promise;
-// mongoose.connect("mongodb://heroku_xd394bdd:ncntvcs1jnacmt48iaiodvflb7@ds161016.mlab.com:61016/heroku_xd394bdd" , {
-// 	useMongoClient: true
-// });
+
 var MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost/mongoHeadlines";
 
 mongoose.connect(MONGODB_URI);
